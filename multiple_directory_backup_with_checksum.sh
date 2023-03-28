@@ -1,47 +1,46 @@
 #!/bin/bash
 
-# define variables
-SOURCE_DIRS="/hdfs/source/dir1 /hdfs/source/dir2 /hdfs/source/dir3"
-BACKUP_DIR="/hdfs/backup"
-LOG_FILE="/var/log/hdfs_backup.log"
-DATE=$(date +%Y-%m-%d\ %H:%M:%S)
-VALIDATION_ERROR=0
+# Set the HDFS directories to backup
+BACKUP_DIRS=("/hdfs/dir1" "/hdfs/dir2" "/hdfs/dir3")
 
-# loop over source directories and backup each one
-for DIR in $SOURCE_DIRS; do
-  # create backup directory if it doesn't exist
-  if ! hdfs dfs -test -d $BACKUP_DIR/$(basename $DIR); then
-    hdfs dfs -mkdir -p $BACKUP_DIR/$(basename $DIR)
-  fi
-  
-  # backup the directory
-  hdfs dfs -cp -p $DIR/* $BACKUP_DIR/$(basename $DIR)/
-  
-  # check for errors and log results
-  if [ $? -eq 0 ]; then
-    echo "$DATE: Successfully backed up $DIR to $BACKUP_DIR/$(basename $DIR)" >> $LOG_FILE
-  else
-    echo "$DATE: Failed to backup $DIR to $BACKUP_DIR/$(basename $DIR)" >> $LOG_FILE
-    VALIDATION_ERROR=1
-  fi
-done
+# Set the backup directory name
+BACKUP_NAME="hdfs_backup_$(date +%Y%m%d_%H%M%S)"
 
-# validate checksum of backup directory contents
-for DIR in $SOURCE_DIRS; do
-  SOURCE_CHECKSUM=$(hdfs dfs -checksum $DIR/* | awk '{print $1}' | sort | md5sum | awk '{print $1}')
-  BACKUP_CHECKSUM=$(hdfs dfs -checksum $BACKUP_DIR/$(basename $DIR)/* | awk '{print $1}' | sort | md5sum | awk '{print $1}')
-  
-  if [ "$SOURCE_CHECKSUM" != "$BACKUP_CHECKSUM" ]; then
-    echo "$DATE: Validation error - checksum of $DIR does not match backup in $BACKUP_DIR/$(basename $DIR)" >> $LOG_FILE
-    VALIDATION_ERROR=1
-  else
-    echo "$DATE: Successfully validated backup of $DIR in $BACKUP_DIR/$(basename $DIR)" >> $LOG_FILE
-  fi
-done
+# Set the log file name
+LOG_FILE="backup.log"
 
-# exit with error code if there was a validation error
-if [ $VALIDATION_ERROR -eq 1 ]; then
-  exit 1
+# Function to log messages to the log file
+log_message() {
+  echo "$(date +"%Y-%m-%d %H:%M:%S") $1" >> $LOG_FILE
+}
+
+# Check if backup directory already exists
+if hdfs dfs -test -d /$BACKUP_NAME; then
+  log_message "Backup directory /$BACKUP_NAME already exists. Removing it..."
+  hdfs dfs -rm -r /$BACKUP_NAME
 fi
 
-exit 0
+# Create backup directory
+log_message "Creating backup directory /$BACKUP_NAME..."
+hdfs dfs -mkdir /$BACKUP_NAME
+
+# Backup each directory
+for DIR in "${BACKUP_DIRS[@]}"; do
+  DIR_NAME=$(basename $DIR)
+  log_message "Backing up directory $DIR_NAME to /$BACKUP_NAME/$DIR_NAME..."
+  hdfs dfs -cp -p $DIR /$BACKUP_NAME/
+done
+
+# Validate backup by comparing checksums of directories and backup directories
+for DIR in "${BACKUP_DIRS[@]}"; do
+  DIR_NAME=$(basename $DIR)
+  log_message "Validating backup of $DIR_NAME..."
+  DIR_CHECKSUM=$(hdfs dfs -checksum $DIR | cut -d " " -f 1)
+  BACKUP_CHECKSUM=$(hdfs dfs -checksum /$BACKUP_NAME/$DIR_NAME | cut -d " " -f 1)
+  if [ "$DIR_CHECKSUM" != "$BACKUP_CHECKSUM" ]; then
+    log_message "Validation failed for $DIR_NAME. Checksums do not match."
+  else
+    log_message "Validation succeeded for $DIR_NAME."
+  fi
+done
+
